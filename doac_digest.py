@@ -437,13 +437,19 @@ class LLM:
             log("警告: GitHub Models 已于 2026-07-30 永久退役(410)，建议改配智谱等 OpenAI 兼容服务: "
                 "OPENAI_BASE_URL + CUSTOM_API_KEY + LLM_MODEL，或 GEMINI_API_KEY / GROQ_API_KEY")
         if not self.provider or (provider == "custom" and not self.model):
-            raise SystemExit("未找到可用 LLM: 设 GEMINI_API_KEY / GROQ_API_KEY 之一，"
-                             "或 OPENAI_BASE_URL + CUSTOM_API_KEY + LLM_MODEL (GITHUB_TOKEN 自动可用)")
+            raise SystemExit(
+                "未配置可用的 LLM，三选一（仓库 Settings → Secrets → Actions）：\n"
+                "  1) 智谱(推荐,大陆直连): OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4 "
+                "+ CUSTOM_API_KEY=<你的key>，模型默认 glm-4.7-flash\n"
+                "  2) GEMINI_API_KEY=<key>  (aistudio.google.com)\n"
+                "  3) GROQ_API_KEY=<key>   (console.groq.com)\n"
+                "注意: GitHub Models 已于 2026-07 永久退役，GITHUB_TOKEN 通道不可用"
+            )
         if not self.provider:
             raise SystemExit("未找到可用 LLM: 请设置 GEMINI_API_KEY / GROQ_API_KEY / GITHUB_TOKEN 之一")
         log(f"LLM: {self.provider} / {self.model}")
 
-    def chat(self, prompt, max_tokens=4000, retries=3):
+    def chat(self, prompt, max_tokens=4000, retries=5):
         for attempt in range(retries):
             try:
                 if self.provider == "gemini":
@@ -470,6 +476,11 @@ class LLM:
                 if "410" in msg or "retirement" in msg:  # 服务永久下线，重试没有意义
                     log("  该 LLM 服务已永久下线(410)，不再重试")
                     raise
+                if "429" in msg or "1305" in msg or "访问量过大" in msg:
+                    wait = 20 * (attempt + 1)  # 免费模型高峰过载：20/40/60/80s 递增等待
+                    log(f"  LLM 过载(429)，等待 {wait}s 后重试({attempt + 1}/{retries})，可稍后再跑或换 LLM_MODEL")
+                    time.sleep(wait)
+                    continue
                 log(f"  LLM 调用失败({attempt + 1}/{retries}): {e}")
                 if attempt == retries - 1:
                     raise
