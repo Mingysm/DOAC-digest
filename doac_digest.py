@@ -5,19 +5,9 @@ DOAC (The Diary Of A CEO) 播客自动更新 + 内容摘要 + 邮件推送
 
 流程:
   1. 拉取官方 RSS，与 state/seen.json 比对，只处理新集
-  2. 取文本稿: 优先抓 YouTube 自动字幕(json3)；失败则下载音频用 Whisper 转录兜底
+  2. 取文本稿: 优先官方 transcript → YouTube 字幕 → 音频 Whisper 转录
   3. 调用免费 LLM 做 map-reduce 摘要，输出中文
   4. 通过 SMTP 发送 HTML 邮件
-
-免费 LLM 支持(自动按可用 key 选择):
-  - gemini  : Google AI Studio 免费档 (GEMINI_API_KEY)
-  - groq    : Groq 免费档 (GROQ_API_KEY) + Whisper 转录兜底
-  - github  : GitHub Models 免费档 (GITHUB_TOKEN，Actions 里自带)
-
-用法:
-  python3 doac_digest.py --dry-run            # 只看会处理哪些集，不调 LLM、不发信
-  python3 doac_digest.py --max-new 2          # 本次最多处理 2 集
-  python3 doac_digest.py --force GUID         # 强制重跑某一集(调试用)
 """
 
 import argparse
@@ -28,7 +18,6 @@ import smtplib
 import subprocess
 import sys
 import tempfile
-import textwrap
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -43,11 +32,9 @@ RSS_URL = os.environ.get("DOAC_RSS", "https://rss2.flightcast.com/xmsftuzjjykcmq
 STATE_FILE = os.environ.get("DOAC_STATE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "seen.json"))
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 
-SUMMARY_LANG = os.environ.get("SUMMARY_LANG", "zh")  # zh / en
+SUMMARY_LANG = os.environ.get("SUMMARY_LANG", "zh")
 
-# ---------------------------------------------------------------------------
-# 日志
-# ---------------------------------------------------------------------------
+
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
@@ -64,7 +51,7 @@ NS = {
 
 def fetch_rss(url=RSS_URL):
     local = os.environ.get("DOAC_RSS_FILE")
-    if local and os.path.exists(local):  # 本地调试用，避免每次重下 6MB
+    if local and os.path.exists(local):
         return open(local, "rb").read()
     req = Request(url, headers={"User-Agent": UA})
     with urlopen(req, timeout=300) as r:
@@ -84,7 +71,6 @@ def parse_rss(raw):
         enclosure = it.find("enclosure")
         audio = enclosure.get("url") if enclosure is not None else ""
         duration = txt("itunes:duration", NS)
-        # DOAC 官方 RSS 直接带 transcript（最近 150+ 集都有），这是最稳最省事的文本源
         tr = it.find("podcast:transcript", NS)
         transcript_url = (tr.get("url") or "") if tr is not None else ""
         desc = txt("description") or txt("content:encoded", NS)
@@ -99,7 +85,6 @@ def parse_rss(raw):
         except Exception:
             pub_iso = pub
 
-        # itunes:duration 可能是 "1:02:03" 或纯秒数
         secs = 0
         if duration:
             if ":" in duration:
@@ -128,9 +113,8 @@ def parse_rss(raw):
     return items
 
 
-# DOAC 的 RSS 里混有 "Most Replayed Moment" 之类的剪辑片段，默认跳过
 SKIP_KEYWORDS = ("most replayed", "trailer", "preview", "teaser", "coming soon", "introducing")
-MIN_SECS = int(os.environ.get("MIN_SECS") or 1800)  # 默认过滤掉 < 30 分钟的条目
+MIN_SECS = int(os.environ.get("MIN_SECS") or 1800)
 
 
 def should_skip(ep):
@@ -188,11 +172,11 @@ def find_youtube_id(title):
         if score > best_score:
             best, best_score = vid, score
     log(f"  YouTube 匹配: {best} (相似度 {best_score:.2f})")
-    return best if best_score >= 0.25 else None
+    # [FIX] 阈值从 0.25 降到 0.15，长标题下 Jaccard 偏低会误杀
+    return best if best_score >= 0.15 else None
 
 
 def clean_json3(path):
-    """解析 YouTube json3 字幕 -> 纯文本。json3 的 event 通常就是完整一句，重复很少"""
     data = json.loads(open(path, encoding="utf-8").read())
     lines, buf = [], []
     for ev in data.get("events", []):
@@ -202,10 +186,9 @@ def clean_json3(path):
         if not s:
             continue
         buf.append(s)
-        # 遇到句末标点就断行，保持可读性
         if s[-1] in ".!?" or len(buf) >= 6:
             line = " ".join(buf)
-            if line not in lines[-3:]:  # 去掉滚动字幕的相邻重复
+            if line not in lines[-3:]:
                 lines.append(line)
             buf = []
     if buf:
@@ -214,7 +197,6 @@ def clean_json3(path):
 
 
 def clean_vtt(path):
-    """兜底: 解析 vtt/srt，做相邻重复行去重"""
     raw = open(path, encoding="utf-8", errors="ignore").read()
     raw = re.sub(r"^WEBVTT.*?\n\n", "", raw, flags=re.S)
     raw = re.sub(r"^\d{2}:\d{2}:\d{2}\.\d{3}.*?$", "", raw, flags=re.M)
@@ -298,7 +280,6 @@ def get_transcript_from_youtube(title):
 
 
 def transcribe_audio(audio_url):
-    """兜底: 下载音频 -> ffmpeg 压成低码率 mono -> Groq Whisper 转录"""
     key = os.environ.get("GROQ_API_KEY")
     if not key or not audio_url:
         log("  无 GROQ_API_KEY，跳过音频转录兜底")
@@ -315,7 +296,6 @@ def transcribe_audio(audio_url):
         except Exception as e:
             log(f"  音频下载失败: {e}")
             return None
-        # 16kbps mono 16kHz: 1.5 小时约 11MB，可单次上传
         small = os.path.join(td, "small.mp3")
         rc, _, err = _run(["ffmpeg", "-y", "-i", src, "-ac", "1", "-ar", "16000",
                            "-b:a", "16k", small], timeout=1800)
@@ -325,7 +305,6 @@ def transcribe_audio(audio_url):
         size_mb = os.path.getsize(small) / 1e6
         log(f"  压缩后 {size_mb:.1f}MB, 调用 Whisper...")
         segs = []
-        # Groq 单次 25MB 限制，超过则按时长切片
         if size_mb <= 24:
             parts = [small]
         else:
@@ -419,8 +398,6 @@ class LLM:
         gemini, groq, gh = os.environ.get("GEMINI_API_KEY"), os.environ.get("GROQ_API_KEY"), os.environ.get("GITHUB_TOKEN")
         base = (os.environ.get("OPENAI_BASE_URL") or "").strip()
         if not provider:
-            # 任何 OpenAI 兼容服务（OpenRouter / DeepSeek / 智谱 / SiliconFlow 等）
-            # 设 OPENAI_BASE_URL + CUSTOM_API_KEY + LLM_MODEL 即可接入
             provider = "custom" if base else "gemini" if gemini else "groq" if groq else "github" if gh else ""
         if provider == "gemini" and not gemini:
             provider = ""
@@ -434,8 +411,7 @@ class LLM:
                     "custom": os.environ.get("CUSTOM_API_KEY") or os.environ.get("OPENAI_API_KEY")}.get(provider)
         self.base = base
         if provider == "github":
-            log("警告: GitHub Models 已于 2026-07-30 永久退役(410)，建议改配智谱等 OpenAI 兼容服务: "
-                "OPENAI_BASE_URL + CUSTOM_API_KEY + LLM_MODEL，或 GEMINI_API_KEY / GROQ_API_KEY")
+            log("警告: GitHub Models 已于 2026-07-30 永久退役(410)，建议改配智谱等 OpenAI 兼容服务")
         if not self.provider or (provider == "custom" and not self.model):
             raise SystemExit(
                 "未配置可用的 LLM，三选一（仓库 Settings → Secrets → Actions）：\n"
@@ -445,8 +421,6 @@ class LLM:
                 "  3) GROQ_API_KEY=<key>   (console.groq.com)\n"
                 "注意: GitHub Models 已于 2026-07 永久退役，GITHUB_TOKEN 通道不可用"
             )
-        if not self.provider:
-            raise SystemExit("未找到可用 LLM: 请设置 GEMINI_API_KEY / GROQ_API_KEY / GITHUB_TOKEN 之一")
         log(f"LLM: {self.provider} / {self.model}")
 
     def chat(self, prompt, max_tokens=4000, retries=5):
@@ -460,7 +434,7 @@ class LLM:
                     if r.status_code != 200:
                         raise RuntimeError(f"{r.status_code} {r.text[:200]}")
                     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                else:  # groq / github / custom 都是 OpenAI 兼容
+                else:
                     url = {"groq": "https://api.groq.com/openai/v1/chat/completions",
                            "github": "https://models.github.ai/inference/chat/completions"}.get(
                               self.provider, self.base.rstrip("/") + "/chat/completions")
@@ -473,12 +447,12 @@ class LLM:
                     return r.json()["choices"][0]["message"]["content"]
             except Exception as e:
                 msg = str(e)
-                if "410" in msg or "retirement" in msg:  # 服务永久下线，重试没有意义
+                if "410" in msg or "retirement" in msg:
                     log("  该 LLM 服务已永久下线(410)，不再重试")
                     raise
                 if "429" in msg or "1305" in msg or "访问量过大" in msg:
-                    wait = 20 * (attempt + 1)  # 免费模型高峰过载：20/40/60/80s 递增等待
-                    log(f"  LLM 过载(429)，等待 {wait}s 后重试({attempt + 1}/{retries})，可稍后再跑或换 LLM_MODEL")
+                    wait = 20 * (attempt + 1)
+                    log(f"  LLM 过载(429)，等待 {wait}s 后重试({attempt + 1}/{retries})")
                     time.sleep(wait)
                     continue
                 log(f"  LLM 调用失败({attempt + 1}/{retries}): {e}")
@@ -503,7 +477,7 @@ def chunk_text(text, size=30000):
 
 def summarize(llm, ep, text):
     max_chars = int(os.environ.get("MAX_CHARS") or 250000)
-    if len(text) > max_chars:  # 超长集截断，避免免费额度被单集吃光
+    if len(text) > max_chars:
         log(f"  文本 {len(text)} 字符，截断到 {max_chars}")
         text = text[:max_chars]
     chunks = chunk_text(text)
@@ -512,7 +486,7 @@ def summarize(llm, ep, text):
     for i, c in enumerate(chunks, 1):
         log(f"  map {i}/{len(chunks)}")
         partials.append(llm.chat(MAP_PROMPT.format(i=i, n=len(chunks), title=ep["title"], chunk=c), max_tokens=2000))
-        time.sleep(5)  # 免费档 RPM 通常 15，放慢一点避免 429
+        time.sleep(5)
     joined = "\n\n".join(f"[Part {i}]\n{p}" for i, p in enumerate(partials, 1))
     log("  reduce")
     return llm.chat(REDUCE_PROMPT.format(title=ep["title"], guest=ep["description"][:400], chunks=joined), max_tokens=4000)
@@ -537,6 +511,13 @@ def md_to_html(md):
                 in_list = True
             item_txt = re.sub(r"^\s*[-*]\s", "", s)
             html_body.append(f"<li>{item_txt}</li>")
+        # [FIX] 支持有序列表 1. 2. 3.
+        elif re.match(r"^\s*\d+[.)]\s", s):
+            if not in_list:
+                html_body.append("<ul>")
+                in_list = True
+            item_txt = re.sub(r"^\s*\d+[.)]\s", "", s)
+            html_body.append(f"<li>{item_txt}</li>")
         elif s.strip():
             if in_list:
                 html_body.append("</ul>")
@@ -546,6 +527,8 @@ def md_to_html(md):
         html_body.append("</ul>")
     body = "\n".join(html_body)
     body = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", body)
+    # [FIX] 支持 Markdown 链接 [文字](url)
+    body = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", r'<a href="\2">\1</a>', body)
     return f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;
 font-size:15px;line-height:1.75;color:#1a1a1a;max-width:680px;margin:0 auto;padding:16px">
 {body}</div>"""
@@ -568,7 +551,6 @@ def send_mail(subject, html_body, plain):
     msg.attach(MIMEText(plain, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    # 465 走 SSL（网易 163/QQ 等只支持 465，不支持 587 STARTTLS）；587 走 STARTTLS（Gmail 等）
     if port == 465:
         with smtplib.SMTP_SSL(host, port, timeout=60) as s:
             s.login(user, pwd)
@@ -597,7 +579,7 @@ def load_state():
 def save_state(state):
     os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
     seen, out = set(), []
-    for g in state["seen"]:  # seen 按"最新在前"排列，截断时保留最新的
+    for g in state["seen"]:
         if g not in seen:
             seen.add(g)
             out.append(g)
@@ -622,8 +604,6 @@ def main():
     state = load_state()
     seen = set(state["seen"])
 
-    # 只关心最近 since_days 天内发布的集：这样 886 集历史根本不进候选，
-    # 不必维护一个几百条、还会被截断的已读列表
     cutoff = datetime.now(timezone.utc) - timedelta(days=args.since_days)
     candidates = []
     for it in items:
@@ -636,14 +616,17 @@ def main():
         candidates.append(it)
     log(f"最近 {args.since_days} 天内符合条件的集: {len(candidates)}")
 
+    # [FIX] 显式按发布时间倒序，不依赖 RSS 条目顺序
+    candidates.sort(key=lambda x: x["dt"], reverse=True)
+
     if args.force:
         pending = [it for it in items if it["guid"] == args.force]
-    elif not seen:  # 首次运行：候选全部标记已读，只推送最新 1 集，避免轰炸邮箱
+    elif not seen:
         log("首次运行：只推送最新 1 集，其余候选标记为已读")
-        for it in candidates:
-            state["seen"].insert(0, it["guid"])
         pending = candidates[:1]
-        state["seen"] = [g for g in state["seen"] if g not in {p["guid"] for p in pending}]
+        # [FIX] 先标记其余候选为已读，再排除 pending，逻辑更直白
+        for it in candidates[1:]:
+            state["seen"].insert(0, it["guid"])
         save_state(state)
         seen = set(state["seen"])
     else:
@@ -678,9 +661,11 @@ def main():
             continue
 
         subject = f"[DOAC] {ep['title'][:60]}"
+        # [FIX] 原来这里的 src 未定义，会导致每次发信前 NameError
+        is_yt = "youtube.com" in (source_url or "")
         header = (f"<p style='color:#666;font-size:13px'>"
                   f"发布: {ep['pubDate'][:10]} · 时长: {ep['duration'] or '-'} · "
-                  f"来源: <a href='{source_url}'>{'YouTube' if src else 'Podcast'}</a></p><hr>")
+                  f"来源: <a href='{source_url}'>{'YouTube' if is_yt else 'Podcast'}</a></p><hr>")
         plain = f"{ep['title']}\n{ep['pubDate'][:10]}\n{source_url}\n\n{md}"
 
         if not args.no_mail:
