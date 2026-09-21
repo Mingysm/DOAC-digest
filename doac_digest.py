@@ -58,7 +58,7 @@ def log(msg):
 NS = {
     "itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd",
     "content": "http://purl.org/rss/1.0/modules/content/",
-    "podcast": "https://podcastindex.org/namespace/1.0/",
+    "podcast": "https://podcastindex.org/namespace/1.0",
 }
 
 
