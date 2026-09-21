@@ -541,10 +541,16 @@ def send_mail(subject, html_body, plain):
     msg.attach(MIMEText(plain, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    with smtplib.SMTP(host, port, timeout=60) as s:
-        s.starttls()
-        s.login(user, pwd)
-        s.sendmail(user, [t.strip() for t in to.split(",")], msg.as_string())
+    # 465 走 SSL（网易 163/QQ 等只支持 465，不支持 587 STARTTLS）；587 走 STARTTLS（Gmail 等）
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=60) as s:
+            s.login(user, pwd)
+            s.sendmail(user, [t.strip() for t in to.split(",")], msg.as_string())
+    else:
+        with smtplib.SMTP(host, port, timeout=60) as s:
+            s.starttls()
+            s.login(user, pwd)
+            s.sendmail(user, [t.strip() for t in to.split(",")], msg.as_string())
     log(f"  邮件已发送 -> {to}")
     return True
 
