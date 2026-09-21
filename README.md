@@ -42,11 +42,19 @@ gh repo create doac-digest --public --source=. --push   # 或手动在 GitHub �
 
 | Secret | 值 | 说明 |
 |---|---|---|
-| `SMTP_HOST` | `smtp.gmail.com` | QQ 邮箱填 `smtp.qq.com`，Outlook 填 `smtp.office365.com` |
-| `SMTP_PORT` | `587` | |
-| `SMTP_USER` | `you@gmail.com` | |
-| `SMTP_PASS` | `xxxx xxxx xxxx xxxx` | Gmail 用**应用专用密码**（不是登录密码）：Google 账号 → 安全 → 两步验证 → 应用专用密码 |
-| `MAIL_TO` | `you@gmail.com` | 收件地址，多个用逗号分隔 |
+| `SMTP_HOST` | `smtp.163.com` | 163 网易邮箱；Gmail 填 `smtp.gmail.com`，QQ 填 `smtp.qq.com`，Outlook 填 `smtp.office365.com` |
+| `SMTP_PORT` | `465` | **163/QQ 必须填 465**（SSL）；Gmail 用 `587` |
+| `SMTP_USER` | `you@163.com` | 完整邮箱地址 |
+| `SMTP_PASS` | `xxxxxxxxxxxxxxxx` | **163 授权码**（不是登录密码！），获取方式见下 |
+| `MAIL_TO` | `you@163.com` | 收件地址，多个用逗号分隔 |
+
+### 163 授权码怎么拿（一次性操作，2 分钟）
+
+1. 电脑浏览器登录 [mail.163.com](https://mail.163.com)
+2. 顶部 **设置** → 左侧 **POP3/SMTP/IMAP**
+3. 找到 **SMTP 服务**，点 **开启**（需要手机验证码）
+4. 开启后点 **新增授权密码** → 短信验证 → 得到 **16 位授权码**（只显示一次，立刻复制保存）
+5. 这串授权码就是 `SMTP_PASS` 的值
 
 **三选一填一个（免费 LLM，脚本按 gemini > groq > github 自动选）**：
 
@@ -98,7 +106,7 @@ python3 doac_digest.py --force "<guid>"
 
 1. **"Most Replayed Moment" 这类剪辑片段默认跳过**（标题关键词 + 时长 < 30 分钟双重过滤），只推正片。想连片段一起收，把 `MIN_SECS` 设为 `0` 并改 `SKIP_KEYWORDS`。
 2. **免费额度有限**：单集约 15 万字 → 切成 6 段，共 7 次 LLM 调用，一天几集绰绰有余。若同时跑多个播客，注意 Groq/Gemini 的 RPM 限制（脚本每次调用间隔 5 秒）。
-3. **Gmail 必须用应用专用密码**，且要开启两步验证。
+3. **Gmail 必须用应用专用密码**（且开两步验证）；**163/QQ 必须用授权码**——填登录密码必然认证失败。163 只支持 465 SSL 端口，脚本已自动适配。
 4. **首次运行建议用 `--dry-run` 看一眼**，确认 RSS 解析正常再正式跑。
 5. **旧集可能没有官方 transcript**（153 集以前），此时会走 YouTube 字幕；yt-dlp 现在常被反爬拦，必要时配 `YT_COOKIES_B64`。新集不受影响。
 

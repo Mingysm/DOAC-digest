@@ -130,7 +130,7 @@ def parse_rss(raw):
 
 # DOAC 的 RSS 里混有 "Most Replayed Moment" 之类的剪辑片段，默认跳过
 SKIP_KEYWORDS = ("most replayed", "trailer", "preview", "teaser", "coming soon", "introducing")
-MIN_SECS = int(os.environ.get("MIN_SECS", "1800"))  # 默认过滤掉 < 30 分钟的条目
+MIN_SECS = int(os.environ.get("MIN_SECS") or 1800)  # 默认过滤掉 < 30 分钟的条目
 
 
 def should_skip(ep):
@@ -475,7 +475,7 @@ def chunk_text(text, size=30000):
 
 
 def summarize(llm, ep, text):
-    max_chars = int(os.environ.get("MAX_CHARS", "250000"))
+    max_chars = int(os.environ.get("MAX_CHARS") or 250000)
     if len(text) > max_chars:  # 超长集截断，避免免费额度被单集吃光
         log(f"  文本 {len(text)} 字符，截断到 {max_chars}")
         text = text[:max_chars]
@@ -526,7 +526,7 @@ font-size:15px;line-height:1.75;color:#1a1a1a;max-width:680px;margin:0 auto;padd
 
 def send_mail(subject, html_body, plain):
     host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT", "587"))
+    port = int((os.environ.get("SMTP_PORT") or "").strip() or 587)
     user = os.environ.get("SMTP_USER")
     pwd = os.environ.get("SMTP_PASS")
     to = os.environ.get("MAIL_TO") or user
@@ -582,7 +582,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="只列出会处理的集，不调 LLM、不发信")
     ap.add_argument("--max-new", type=int, default=2, help="单次最多处理几集")
-    ap.add_argument("--since-days", type=int, default=int(os.environ.get("SINCE_DAYS", "7")),
+    ap.add_argument("--since-days", type=int, default=int(os.environ.get("SINCE_DAYS") or 7),
                     help="只处理最近 N 天发布的集（默认 7）")
     ap.add_argument("--force", default="", help="强制处理指定 guid")
     ap.add_argument("--no-mail", action="store_true")
