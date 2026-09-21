@@ -2,17 +2,37 @@ name: DOAC Digest
 
 on:
   schedule:
-    # UTC 时间；DOAC 通常周二/周四更新。换算为北京时间 09:00 / 21:00
+    # UTC 时间；换算为北京时间 09:00 / 21:00
     - cron: '0 1,13 * * *'
   workflow_dispatch:
 
 permissions:
   contents: write
-  models: read        # GitHub Models 免费推理（若用 github provider）
 
 jobs:
   digest:
     runs-on: ubuntu-latest
+    env:
+      # ---- 免费 LLM（任选其一）----
+      # A. 智谱 GLM（推荐，大陆直连）：open.bigmodel.cn 手机号注册拿 key，
+      #    配 OPENAI_BASE_URL + CUSTOM_API_KEY 即可，模型默认 glm-4.7-flash
+      # B. Gemini 免费档：配 GEMINI_API_KEY
+      # C. Groq 免费档：配 GROQ_API_KEY
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL || 'glm-4.7-flash' }}
+      # LLM_PROVIDER: custom
+      # YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}  # 旧集走 YouTube 字幕被拦时再配
+      # SINCE_DAYS: '7'
+      # MIN_SECS: '1800'
+      # ---- 邮件（必填）----
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,39 +49,37 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg || echo "warn: ffmpeg install failed, fallback disabled"
           yt-dlp --version >/dev/null 2>&1 || pip install -U yt-dlp || echo "warn: yt-dlp unavailable"
 
-      - name: Run digest
-        env:
-          # 免费 LLM（任选其一）：
-          #  A. 智谱 GLM（推荐，大陆直连，手机号在 open.bigmodel.cn 注册）:
-          #    OPENAI_BASE_URL: https://open.bigmodel.cn/api/paas/v4
-          #    CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
-          #    LLM_MODEL: glm-4.7-flash
-          #  B. Gemini 免费档: 配 GEMINI_API_KEY
-          #  C. Groq 免费档: 配 GROQ_API_KEY
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          # LLM_MODEL: glm-4.7-flash      # 用智谱时取消注释；用其他服务时填对应模型 ID
-          # LLM_PROVIDER: custom          # 想强制指定时打开
-          # YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}  # 旧集走 YouTube 字幕被拦时再配
-          # SINCE_DAYS: '7'               # 只处理最近 N 天发布的集
-          # MIN_SECS: '1800'              # 过滤掉 < 30 分钟的剪辑片段；设 0 关闭
-          # 邮件（必填）
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
+      - name: Diagnostics
         run: |
-          python doac_digest.py --max-new 2 | tee run.log
+          S="$GITHUB_STEP_SUMMARY"
+          {
+            echo "## 配置体检"
+            check() { if [ -n "${!1}" ]; then echo "- $1: 已配置"; else echo "- $1: 未配置"; fi; }
+            for v in OPENAI_BASE_URL CUSTOM_API_KEY LLM_MODEL SMTP_HOST SMTP_USER SMTP_PASS MAIL_TO GEMINI_API_KEY GROQ_API_KEY; do check "$v"; done
+          } >> "$S"
+          # 有智谱/自定义 OpenAI 兼容配置时，当场实测一次连通性
+          if [ -n "$OPENAI_BASE_URL" ] && [ -n "$CUSTOM_API_KEY" ]; then
+            code=$(curl -s -o /tmp/llm.json -w "%{http_code}" --max-time 60 -X POST "$OPENAI_BASE_URL/chat/completions" \
+              -H "Authorization: Bearer $CUSTOM_API_KEY" -H "Content-Type: application/json" \
+              -d "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":5}")
+            if [ "$code" = "200" ]; then
+              echo "- LLM 连通性: OK（模型 $LLM_MODEL）" >> "$S"
+            else
+              { echo "- LLM 连通性: 失败 HTTP $code，响应："; echo '```'; head -c 600 /tmp/llm.json; echo; echo '```'; } >> "$S"
+            fi
+          fi
+
+      - name: Run digest
+        run: |
+          # 2>&1 把脚本报错(SystemExit/traceback)也收进 run.log，失败时能在 Summary 里直接看到原因
+          python doac_digest.py --max-new 2 2>&1 | tee run.log
           exit ${PIPESTATUS[0]}
 
       - name: Show failure reason
         if: failure()
         run: |
           {
-            echo "## ❌ 运行失败，日志最后 40 行如下"
+            echo "## 运行失败，日志最后 40 行如下"
             echo '```'
             tail -40 run.log 2>/dev/null || echo "(run.log 不存在，脚本可能没跑起来，请检查仓库文件是否齐全)"
             echo '```'
