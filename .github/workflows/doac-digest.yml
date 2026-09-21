@@ -23,7 +23,8 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # requirements.txt 缺失时直接装依赖，不让文件遗漏拖垮任务
+          pip install -r requirements.txt || pip install requests yt-dlp
           # ffmpeg/yt-dlp 只是兜底手段（官方 transcript 优先），装不上也不让整个任务挂掉
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg || echo "warn: ffmpeg install failed, fallback disabled"
           yt-dlp --version >/dev/null 2>&1 || pip install -U yt-dlp || echo "warn: yt-dlp unavailable"
@@ -45,7 +46,19 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-        run: python doac_digest.py --max-new 2
+        run: |
+          python doac_digest.py --max-new 2 | tee run.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Show failure reason
+        if: failure()
+        run: |
+          {
+            echo "## ❌ 运行失败，日志最后 40 行如下"
+            echo '```'
+            tail -40 run.log 2>/dev/null || echo "(run.log 不存在，脚本可能没跑起来，请检查仓库文件是否齐全)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit state
         run: |
