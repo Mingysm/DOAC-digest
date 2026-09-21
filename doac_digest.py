@@ -417,8 +417,11 @@ class LLM:
     def __init__(self):
         provider = os.environ.get("LLM_PROVIDER", "").lower()
         gemini, groq, gh = os.environ.get("GEMINI_API_KEY"), os.environ.get("GROQ_API_KEY"), os.environ.get("GITHUB_TOKEN")
+        base = (os.environ.get("OPENAI_BASE_URL") or "").strip()
         if not provider:
-            provider = "gemini" if gemini else "groq" if groq else "github" if gh else ""
+            # 任何 OpenAI 兼容服务（OpenRouter / DeepSeek / 智谱 / SiliconFlow 等）
+            # 设 OPENAI_BASE_URL + CUSTOM_API_KEY + LLM_MODEL 即可接入
+            provider = "custom" if base else "gemini" if gemini else "groq" if groq else "github" if gh else ""
         if provider == "gemini" and not gemini:
             provider = ""
         self.provider = provider
@@ -427,7 +430,15 @@ class LLM:
             self.model = {"gemini": "gemini-2.5-flash",
                           "groq": "llama-3.3-70b-versatile",
                           "github": "openai/gpt-4o-mini"}.get(provider, "")
-        self.key = {"gemini": gemini, "groq": groq, "github": gh}.get(provider)
+        self.key = {"gemini": gemini, "groq": groq, "github": gh,
+                    "custom": os.environ.get("CUSTOM_API_KEY") or os.environ.get("OPENAI_API_KEY")}.get(provider)
+        self.base = base
+        if provider == "github":
+            log("警告: GitHub Models 已于 2026-07-30 永久退役(410)，建议改配智谱等 OpenAI 兼容服务: "
+                "OPENAI_BASE_URL + CUSTOM_API_KEY + LLM_MODEL，或 GEMINI_API_KEY / GROQ_API_KEY")
+        if not self.provider or (provider == "custom" and not self.model):
+            raise SystemExit("未找到可用 LLM: 设 GEMINI_API_KEY / GROQ_API_KEY 之一，"
+                             "或 OPENAI_BASE_URL + CUSTOM_API_KEY + LLM_MODEL (GITHUB_TOKEN 自动可用)")
         if not self.provider:
             raise SystemExit("未找到可用 LLM: 请设置 GEMINI_API_KEY / GROQ_API_KEY / GITHUB_TOKEN 之一")
         log(f"LLM: {self.provider} / {self.model}")
@@ -443,9 +454,10 @@ class LLM:
                     if r.status_code != 200:
                         raise RuntimeError(f"{r.status_code} {r.text[:200]}")
                     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                else:  # groq / github 都是 OpenAI 兼容
+                else:  # groq / github / custom 都是 OpenAI 兼容
                     url = {"groq": "https://api.groq.com/openai/v1/chat/completions",
-                           "github": "https://models.github.ai/inference/chat/completions"}[self.provider]
+                           "github": "https://models.github.ai/inference/chat/completions"}.get(
+                              self.provider, self.base.rstrip("/") + "/chat/completions")
                     headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
                     body = {"model": self.model, "messages": [{"role": "user", "content": prompt}],
                             "temperature": 0.3, "max_tokens": max_tokens}
@@ -454,6 +466,10 @@ class LLM:
                         raise RuntimeError(f"{r.status_code} {r.text[:200]}")
                     return r.json()["choices"][0]["message"]["content"]
             except Exception as e:
+                msg = str(e)
+                if "410" in msg or "retirement" in msg:  # 服务永久下线，重试没有意义
+                    log("  该 LLM 服务已永久下线(410)，不再重试")
+                    raise
                 log(f"  LLM 调用失败({attempt + 1}/{retries}): {e}")
                 if attempt == retries - 1:
                     raise

@@ -56,17 +56,17 @@ gh repo create doac-digest --public --source=. --push   # 或手动在 GitHub �
 4. 开启后点 **新增授权密码** → 短信验证 → 得到 **16 位授权码**（只显示一次，立刻复制保存）
 5. 这串授权码就是 `SMTP_PASS` 的值
 
-**三选一填一个（免费 LLM，脚本按 gemini > groq > github 自动选）**：
+**三选一填一个（免费 LLM，脚本自动识别）**：
+
+> ⚠️ GitHub Models（`GITHUB_TOKEN` 白嫖通道）已于 2026-07-30 被 GitHub 永久退役，不可再用。
 
 | Secret | 免费额度 | 备注 |
 |---|---|---|
-| `GEMINI_API_KEY` | gemini-2.5-flash 免费档，最划算 | [aistudio.google.com](https://aistudio.google.com/apikey) 一键生成，注意需支持地区 |
-| `GROQ_API_KEY` | llama-3.3-70b + whisper-large-v3 免费档 | [console.groq.com](https://console.groq.com/keys)，注册门槛最低 |
-| `GITHUB_TOKEN` | GitHub Models 免费推理 | **不用手动填**，`${{ secrets.GITHUB_TOKEN }}` 自动注入，最省事 |
+| `OPENAI_BASE_URL` + `CUSTOM_API_KEY` + `LLM_MODEL` | 智谱 GLM Flash 系列**完全免费** | **国内首选**：[open.bigmodel.cn](https://open.bigmodel.cn) 手机号注册 → API Keys → 新建。三个 Secret 分别填 `https://open.bigmodel.cn/api/paas/v4`、你的 key、`glm-4.7-flash`（200K 上下文；也可用 `glm-4.5-flash`） |
+| `GEMINI_API_KEY` | gemini-2.5-flash 免费档 | [aistudio.google.com](https://aistudio.google.com/apikey)，需支持地区访问 |
+| `GROQ_API_KEY` | gpt-oss 等免费档，含 Whisper 转录 | [console.groq.com](https://console.groq.com/keys)，部分地区/IP 注册会被拦 |
 
-> **最省事的选法**：什么都不填，直接用 `GITHUB_TOKEN`（workflow 里已自动注入），零注册。
-> 想效果更好 → 首选 `GROQ_API_KEY`：注册只要邮箱，一份 key 同时覆盖"摘要 + Whisper 兜底转录"。
-> 想强制用哪个，在 workflow 里取消 `LLM_PROVIDER` 那行注释。
+> 任何 OpenAI 兼容的服务（DeepSeek、硅基流动、OpenRouter 等）都能接：填 `OPENAI_BASE_URL` + `CUSTOM_API_KEY` + `LLM_MODEL` 三件套即可。
 
 **可选**：
 
