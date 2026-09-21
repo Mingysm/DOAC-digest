@@ -31,15 +31,22 @@ jobs:
 
       - name: Run digest
         env:
-          # 免费 LLM：三选一即可，脚本会按优先级自动选择 gemini > groq > github
+          # 免费 LLM（任选其一）：
+          #  A. 智谱 GLM（推荐，大陆直连，手机号在 open.bigmodel.cn 注册）:
+          #    OPENAI_BASE_URL: https://open.bigmodel.cn/api/paas/v4
+          #    CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
+          #    LLM_MODEL: glm-4.7-flash
+          #  B. Gemini 免费档: 配 GEMINI_API_KEY
+          #  C. Groq 免费档: 配 GROQ_API_KEY
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # LLM_PROVIDER: gemini        # 想强制指定时打开
-          # LLM_MODEL: gemini-2.5-flash # 想换模型时打开
+          CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          # LLM_MODEL: glm-4.7-flash      # 用智谱时取消注释；用其他服务时填对应模型 ID
+          # LLM_PROVIDER: custom          # 想强制指定时打开
           # YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}  # 旧集走 YouTube 字幕被拦时再配
-          # SINCE_DAYS: '7'             # 只处理最近 N 天发布的集
-          # MIN_SECS: '1800'            # 过滤掉 < 30 分钟的剪辑片段；设 0 关闭
+          # SINCE_DAYS: '7'               # 只处理最近 N 天发布的集
+          # MIN_SECS: '1800'              # 过滤掉 < 30 分钟的剪辑片段；设 0 关闭
           # 邮件（必填）
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
