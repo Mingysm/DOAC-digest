@@ -24,8 +24,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          yt-dlp --version || pip install -U yt-dlp
+          # ffmpeg/yt-dlp 只是兜底手段（官方 transcript 优先），装不上也不让整个任务挂掉
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg || echo "warn: ffmpeg install failed, fallback disabled"
+          yt-dlp --version >/dev/null 2>&1 || pip install -U yt-dlp || echo "warn: yt-dlp unavailable"
 
       - name: Run digest
         env:
