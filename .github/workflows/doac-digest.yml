@@ -1,0 +1,55 @@
+name: DOAC Digest
+
+on:
+  schedule:
+    # UTC 时间；DOAC 通常周二/周四更新。换算为北京时间 09:00 / 21:00
+    - cron: '0 1,13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  models: read        # GitHub Models 免费推理（若用 github provider）
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          yt-dlp --version || pip install -U yt-dlp
+
+      - name: Run digest
+        env:
+          # 免费 LLM：三选一即可，脚本会按优先级自动选择 gemini > groq > github
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # LLM_PROVIDER: gemini        # 想强制指定时打开
+          # LLM_MODEL: gemini-2.5-flash # 想换模型时打开
+          # YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}  # 旧集走 YouTube 字幕被拦时再配
+          # SINCE_DAYS: '7'             # 只处理最近 N 天发布的集
+          # MIN_SECS: '1800'            # 过滤掉 < 30 分钟的剪辑片段；设 0 关闭
+          # 邮件（必填）
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: python doac_digest.py --max-new 2
+
+      - name: Commit state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          git diff --staged --quiet || git commit -m "chore: update state [skip ci]"
+          git push || echo "nothing to push"
